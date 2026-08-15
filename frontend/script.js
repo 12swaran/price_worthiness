@@ -1,4 +1,4 @@
-const API_BASE_URL = 'https://price-worthiness-api.onrender.com'; // Update this after deploying backend
+const API_BASE_URL = 'https://price-worthiness.onrender.com'; // Update this after deploying backend
 
 document.addEventListener('DOMContentLoaded', () => {
     const apiKeyInput = document.getElementById('api-key');

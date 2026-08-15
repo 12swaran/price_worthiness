@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app.utils.llm import invoke_llm_with_retry
 from app.utils.matching import evaluate_matches
 from app.utils.cache import get_cached, set_cache
-from app.tools.scrapers import scrape_all_parallel
+from app.tools.scrapers import scrape_all_sequential
 
 class AgentState(TypedDict):
     messages: List[Any]
@@ -103,7 +103,7 @@ def search_exact(state: AgentState) -> AgentState:
     if cached:
         results = cached
     else:
-        results = scrape_all_parallel(query)
+        results = scrape_all_sequential(query)
         set_cache("all", query, results)
         
     return {**state, "exact_results": results}
@@ -164,7 +164,7 @@ def search_similar(state: AgentState) -> AgentState:
         if cached:
             results = cached
         else:
-            results = scrape_all_parallel(successor)
+            results = scrape_all_sequential(successor)
             set_cache("all", successor, results)
             
         exact_succ, similar_succ, _ = evaluate_matches(successor, "", results)

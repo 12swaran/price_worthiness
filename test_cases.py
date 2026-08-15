@@ -2,7 +2,10 @@ import asyncio
 import sys
 import codecs
 from langchain_core.messages import HumanMessage
+from dotenv import load_dotenv
 from app.graph import workflow
+
+load_dotenv()
 
 if sys.platform == 'win32':
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())

@@ -413,25 +413,77 @@ def scrape_vijay_sales(query: str) -> List[Dict[str, Any]]:
     return _scrape_with_own_browser(query, "Vijay Sales", "https://www.vijaysales.com/search?q={query}", _extract_vijay_sales)
 
 
-def scrape_all_parallel(query: str) -> List[Dict[str, Any]]:
-    """Runs all 5 scrapers in parallel — each with its own Playwright browser."""
-    scrapers = [
-        scrape_amazon,
-        scrape_flipkart,
-        scrape_reliance,
-        scrape_croma,
-        scrape_vijay_sales,
+def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]:
+    all_results = []
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+                locale="en-IN",
+                extra_http_headers={
+                    "Accept-Language": "en-IN,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                }
+            )
+            
+            for site_name, url_template, scrape_fn in sites:
+                results = []
+                for attempt in range(2):
+                    page = None
+                    try:
+                        page = context.new_page()
+                        url = url_template.format(query=urllib.parse.quote_plus(query))
+                        print(f"[SCRAPER] {site_name} navigating to: {url}")
+                        
+                        page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                        page.wait_for_timeout(4000)
+                        
+                        results = scrape_fn(page, site_name)
+                        print(f"[SCRAPER] {site_name} found {len(results)} results")
+                        for r in results[:2]:
+                            if not r.get("error"):
+                                print(f"  -> {r.get('title', '')[:60]} | Rs.{r.get('price', 0)}")
+                        
+                        page.close()
+                        break
+                    except Exception as e:
+                        print(f"[SCRAPER] {site_name} ERROR (attempt {attempt+1}): {e}")
+                        if page:
+                            try: page.close()
+                            except: pass
+                        if attempt == 0:
+                            time.sleep(2)
+                        else:
+                            all_results.append({"site": site_name, "error": True, "message": str(e)})
+                
+                if results:
+                    all_results.extend(results)
+                    
+            browser.close()
+    except Exception as e:
+        print(f"[SCRAPER] Global ERROR: {e}")
+        all_results.append({"site": "System", "error": True, "message": f"Global Scraper Error: {str(e)}"})
+        
+    return all_results
+
+
+def scrape_all_sequential(query: str) -> List[Dict[str, Any]]:
+    """Runs all 5 scrapers sequentially using a SINGLE Playwright browser in a thread to save memory."""
+    sites = [
+        ("Amazon.in", "https://www.amazon.in/s?k={query}", _extract_amazon),
+        ("Flipkart", "https://www.flipkart.com/search?q={query}", _extract_flipkart),
+        ("Reliance Digital", "https://www.reliancedigital.in/search?q={query}", _extract_reliance),
+        ("Croma", "https://www.croma.com/search/?text={query}", _extract_croma),
+        ("Vijay Sales", "https://www.vijaysales.com/search?q={query}", _extract_vijay_sales),
     ]
     
-    all_results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(scraper, query): scraper for scraper in scrapers}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                results = future.result(timeout=60)
-                all_results.extend(results)
-            except Exception as e:
-                scraper_name = getattr(futures[future], '__name__', str(futures[future]))
-                all_results.append({"site": scraper_name, "error": True, "message": str(e)})
+    print(f"[SCRAPER] Starting sequential scraping for query: '{query}'")
     
-    return all_results
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_run_sequential_scrape, query, sites)
+        try:
+            return future.result(timeout=180)
+        except Exception as e:
+            return [{"site": "System", "error": True, "message": f"Thread Error: {str(e)}"}]

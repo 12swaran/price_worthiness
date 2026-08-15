@@ -1,4 +1,4 @@
-let API_BASE_URL = 'https://price-worthiness.onrender.com'; // Update this after deploying backend
+let API_BASE_URL = 'https://price-worthiness.onrender.com';
 if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:') {
     API_BASE_URL = 'http://localhost:8000';
 }
@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const keyStatus = document.getElementById('key-status');
     const clearCacheBtn = document.getElementById('clear-cache-btn');
     const cacheStatus = document.getElementById('cache-status');
-    
+
     const chatMessages = document.getElementById('chat-messages');
     const userInput = document.getElementById('user-input');
     const sendBtn = document.getElementById('send-btn');
@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let threadId = 'user_' + Math.random().toString(36).substring(2, 9);
 
     // Auto-resize textarea
-    userInput.addEventListener('input', function() {
+    userInput.addEventListener('input', function () {
         this.style.height = 'auto';
         this.style.height = (this.scrollHeight) + 'px';
         if (this.value === '') {
@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         saveKeyBtn.disabled = true;
         saveKeyBtn.textContent = 'Saving...';
-        
+
         try {
             const res = await fetch(`${API_BASE_URL}/update-api-key`, {
                 method: 'POST',
@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ api_key: key })
             });
             const data = await res.json();
-            
+
             if (res.ok) {
                 keyStatus.textContent = 'Key updated successfully!';
                 keyStatus.className = 'status-msg';
@@ -95,7 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
         userInput.value = '';
         userInput.style.height = 'auto';
         sendBtn.disabled = true;
-        
+
         // Add loading indicator
         const loadingId = addLoadingIndicator();
 
@@ -105,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: text, thread_id: threadId })
             });
-            
+
             let data;
             const contentType = res.headers.get("content-type");
             if (contentType && contentType.includes("application/json")) {
@@ -114,9 +114,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 await res.text();
                 throw new Error(`Server returned a non-JSON response (Status: ${res.status}). The server might be deploying, sleeping, or crashed.`);
             }
-            
+
             removeLoadingIndicator(loadingId);
-            
+
             if (res.ok) {
                 addMessageToUI(data.response, 'ai-message', true);
             } else {
@@ -142,11 +142,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function addMessageToUI(text, type, parseMarkdown = false) {
         const msgDiv = document.createElement('div');
         msgDiv.className = `message ${type}`;
-        
+
         const avatar = document.createElement('div');
         avatar.className = 'avatar';
         avatar.textContent = type === 'user-message' ? '👤' : '🤖';
-        
+
         const content = document.createElement('div');
         content.className = 'content';
         if (parseMarkdown) {
@@ -154,7 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             content.textContent = text;
         }
-        
+
         msgDiv.appendChild(avatar);
         msgDiv.appendChild(content);
         chatMessages.appendChild(msgDiv);
@@ -166,15 +166,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const msgDiv = document.createElement('div');
         msgDiv.className = 'message ai-message';
         msgDiv.id = id;
-        
+
         const avatar = document.createElement('div');
         avatar.className = 'avatar';
         avatar.textContent = '🤖';
-        
+
         const content = document.createElement('div');
         content.className = 'typing-indicator';
         content.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
-        
+
         msgDiv.appendChild(avatar);
         msgDiv.appendChild(content);
         chatMessages.appendChild(msgDiv);

@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: price-worthiness-api
+    env: docker
+    region: ohio
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false # Must be set manually in Render dashboard

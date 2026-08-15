@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langchain
+langgraph
+langchain-groq
+playwright
+rapidfuzz
+python-dotenv
+pydantic
+langgraph-checkpoint-sqlite

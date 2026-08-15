@@ -106,7 +106,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ message: text, thread_id: threadId })
             });
             
-            const data = await res.json();
+            let data;
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                data = await res.json();
+            } else {
+                await res.text();
+                throw new Error(`Server returned a non-JSON response (Status: ${res.status}). The server might be deploying, sleeping, or crashed.`);
+            }
+            
             removeLoadingIndicator(loadingId);
             
             if (res.ok) {
@@ -116,7 +124,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (err) {
             removeLoadingIndicator(loadingId);
-            addMessageToUI(`**Error**: Could not connect to server.`, 'ai-message', true);
+            const errorMsg = err.message.includes('Server returned') ? err.message : 'Could not connect to server.';
+            addMessageToUI(`**Error**: ${errorMsg}`, 'ai-message', true);
         } finally {
             sendBtn.disabled = false;
         }

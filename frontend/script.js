@@ -1,4 +1,7 @@
-const API_BASE_URL = 'https://price-worthiness.onrender.com'; // Update this after deploying backend
+let API_BASE_URL = 'https://price-worthiness.onrender.com'; // Update this after deploying backend
+if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:') {
+    API_BASE_URL = 'http://localhost:8000';
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     const apiKeyInput = document.getElementById('api-key');

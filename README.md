@@ -4,7 +4,7 @@ A robust, multi-agent AI shopping assistant that evaluates whether a product is 
 
 ## Features
 - **LangGraph Orchestration**: Complex state machine to handle exact matches, similarities, ambiguities, and caching.
-- **LLM Powered**: Groq API (`llama-3.3-70b-versatile`) parses input and generates natural language verdicts.
+- **LLM Powered**: Groq API (`openai/gpt-oss-120b`) parses input and generates natural language verdicts.
 - **Parallel Scraping**: Uses Playwright to scrape retailers simultaneously.
 - **Fuzzy Matching**: Uses RapidFuzz to match product variants accurately.
 

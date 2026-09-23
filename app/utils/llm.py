@@ -17,9 +17,9 @@ def init_llm(api_key: str = None) -> ChatGroq:
     if not key:
         raise ValueError("GROQ_API_KEY is not set.")
     
-    # Using llama-3.3-70b-versatile as requested
+    # Groq's replacement for the deprecated llama-3.3-70b-versatile model
     _llm_instance = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         temperature=0.0,
         max_tokens=800,
         max_retries=0  # We handle retries via tenacity to have better control

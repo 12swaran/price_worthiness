@@ -5,6 +5,8 @@ langgraph
 langchain-groq
 playwright
 rapidfuzz
+requests
+beautifulsoup4
 python-dotenv
 pydantic
 langgraph-checkpoint-sqlite

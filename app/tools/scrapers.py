@@ -4,6 +4,8 @@ import time
 import concurrent.futures
 from urllib.parse import urljoin
 from typing import List, Dict, Any
+import requests
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 
@@ -34,7 +36,7 @@ def _scrape_with_own_browser(
     for attempt in range(2):
         try:
             pw = sync_playwright().start()
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(headless=True, timeout=10000)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
@@ -106,6 +108,48 @@ def _make_product_dict(site: str, title: str, price: float, url: str, rating: fl
 
 
 # ─── Individual site scrapers ────────────────────────────────────────────────
+
+def _extract_amazon_html(html: str) -> List[Dict[str, Any]]:
+    """Read product cards from Amazon's server-rendered search HTML."""
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+    seen_asins = set()
+    for card in soup.select("div[data-component-type='s-search-result']")[:30]:
+        asin = card.get("data-asin")
+        if not asin or asin in seen_asins:
+            continue
+        title_node = card.select_one('[data-cy="title-recipe"] a[href*="/dp/"]')
+        if not title_node:
+            title_node = card.select_one("h2")
+        title = title_node.get_text(" ", strip=True) if title_node else ""
+        title = re.sub(r'^Sponsored Ad -\s*', '', title, flags=re.I)
+        price_node = card.select_one(".a-price .a-offscreen")
+        price = extract_price(price_node.get_text(strip=True)) if price_node else 0
+        if len(title) < 10 or price <= 0:
+            continue
+        rating_node = card.select_one("span.a-icon-alt")
+        rating_match = re.search(r'\d+(?:\.\d+)?', rating_node.get_text()) if rating_node else None
+        rating = float(rating_match.group()) if rating_match else 0.0
+        results.append(_make_product_dict(site="Amazon.in", title=title, price=price,
+                                          url=f"https://www.amazon.in/dp/{asin}", rating=rating))
+        seen_asins.add(asin)
+    return results
+
+
+def scrape_amazon_html(query: str) -> List[Dict[str, Any]]:
+    url = f"https://www.amazon.in/s?k={urllib.parse.quote_plus(query)}"
+    try:
+        response = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
+            "Accept-Language": "en-IN,en;q=0.9",
+        }, timeout=10)
+        response.raise_for_status()
+        results = _extract_amazon_html(response.text)
+        if results:
+            return results
+        return [{"site": "Amazon.in", "error": True, "message": "No product cards were available"}]
+    except requests.RequestException as exc:
+        return [{"site": "Amazon.in", "error": True, "message": str(exc)}]
 
 def _extract_amazon(page, site_name: str) -> List[Dict[str, Any]]:
     results = []
@@ -417,7 +461,7 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
     all_results = []
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(headless=True, timeout=10000)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
@@ -430,17 +474,17 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
             
             for site_name, url_template, scrape_fn in sites:
                 results = []
-                for attempt in range(2):
+                for attempt in range(1):
                     page = None
                     try:
                         page = context.new_page()
                         url = url_template.format(query=urllib.parse.quote_plus(query))
                         print(f"[SCRAPER] {site_name} navigating to: {url}")
                         
-                        response = page.goto(url, timeout=12000, wait_until="domcontentloaded")
+                        response = page.goto(url, timeout=10000, wait_until="domcontentloaded")
                         if response and response.status >= 400:
                             raise RuntimeError(f"Retailer returned HTTP {response.status}")
-                        page.wait_for_timeout(2000)
+                        page.wait_for_timeout(1500)
                         
                         results = scrape_fn(page, site_name)
                         print(f"[SCRAPER] {site_name} found {len(results)} results")
@@ -455,11 +499,8 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
                         if page:
                             try: page.close()
                             except: pass
-                        if attempt == 0 and not isinstance(e, RuntimeError):
-                            time.sleep(2)
-                        else:
-                            all_results.append({"site": site_name, "error": True, "message": str(e)})
-                            break
+                        all_results.append({"site": site_name, "error": True, "message": str(e)})
+                        break
                 
                 if results:
                     all_results.extend(results)
@@ -473,9 +514,9 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
 
 
 def scrape_all_sequential(query: str) -> List[Dict[str, Any]]:
-    """Search the retailers with working product selectors in one browser."""
+    """Fetch Amazon's HTML, then search Flipkart in a bounded browser session."""
+    amazon_results = scrape_amazon_html(query)
     sites = [
-        ("Amazon.in", "https://www.amazon.in/s?k={query}", _extract_amazon),
         ("Flipkart", "https://www.flipkart.com/search?q={query}", _extract_flipkart),
     ]
     
@@ -484,6 +525,6 @@ def scrape_all_sequential(query: str) -> List[Dict[str, Any]]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_run_sequential_scrape, query, sites)
         try:
-            return future.result(timeout=60)
+            return amazon_results + future.result(timeout=35)
         except Exception as e:
-            return [{"site": "System", "error": True, "message": f"Thread Error: {str(e)}"}]
+            return amazon_results + [{"site": "Flipkart", "error": True, "message": f"Browser error: {str(e)}"}]

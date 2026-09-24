@@ -5,6 +5,7 @@ from playwright.sync_api import sync_playwright
 
 from app.tools.scrapers import (
     _extract_amazon,
+    _extract_amazon_html,
     _extract_flipkart,
     _make_product_dict,
     extract_price,
@@ -28,6 +29,23 @@ def test_product_dict_has_price_and_direct_link():
     assert result["title"] == "iPhone 17"
     assert result["price"] == 98900
     assert result["url"] == "https://www.amazon.in/dp/B0FQFYXCC4"
+
+
+def test_amazon_static_html_has_full_title_price_and_link():
+    html = '''
+        <div data-component-type="s-search-result" data-asin="B0FQFYXCC4">
+          <h2>Apple</h2>
+          <div data-cy="title-recipe">
+            <a href="/iPhone-17/dp/B0FQFYXCC4">Apple iPhone 17 256 GB</a>
+          </div>
+          <span class="a-price"><span class="a-offscreen">₹98,900</span></span>
+        </div>
+    '''
+    results = _extract_amazon_html(html)
+    assert len(results) == 1
+    assert results[0]["title"] == "Apple iPhone 17 256 GB"
+    assert results[0]["price"] == 98900
+    assert results[0]["url"] == "https://www.amazon.in/dp/B0FQFYXCC4"
 
 
 @pytest.fixture(scope="module")

@@ -5,7 +5,7 @@ A robust, multi-agent AI shopping assistant that evaluates whether a product is 
 ## Features
 - **LangGraph Orchestration**: Handles exact matches, related listings, and ambiguous requests.
 - **LLM Powered**: Groq API (`openai/gpt-oss-120b`) parses conversational requests; plain product searches use the entered name directly.
-- **Live Scraping**: Uses Playwright to check Amazon India and Flipkart for each request; prices are not served from cache.
+- **Live Scraping**: Reads Amazon India's search HTML and uses Playwright for Flipkart on each request; prices are not served from cache.
 - **Product Matching**: Filters accessories and mismatched models before showing retailer prices and product links.
 
 ## Installation

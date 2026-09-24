@@ -473,13 +473,10 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
 
 
 def scrape_all_sequential(query: str) -> List[Dict[str, Any]]:
-    """Runs all 5 scrapers sequentially using a SINGLE Playwright browser in a thread to save memory."""
+    """Search the retailers with working product selectors in one browser."""
     sites = [
         ("Amazon.in", "https://www.amazon.in/s?k={query}", _extract_amazon),
         ("Flipkart", "https://www.flipkart.com/search?q={query}", _extract_flipkart),
-        ("Reliance Digital", "https://www.reliancedigital.in/search?q={query}", _extract_reliance),
-        ("Croma", "https://www.croma.com/search/?text={query}", _extract_croma),
-        ("Vijay Sales", "https://www.vijaysales.com/search?q={query}", _extract_vijay_sales),
     ]
     
     print(f"[SCRAPER] Starting sequential scraping for query: '{query}'")
@@ -487,6 +484,6 @@ def scrape_all_sequential(query: str) -> List[Dict[str, Any]]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_run_sequential_scrape, query, sites)
         try:
-            return future.result(timeout=180)
+            return future.result(timeout=60)
         except Exception as e:
             return [{"site": "System", "error": True, "message": f"Thread Error: {str(e)}"}]

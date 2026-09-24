@@ -514,17 +514,5 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
 
 
 def scrape_all_sequential(query: str) -> List[Dict[str, Any]]:
-    """Fetch Amazon's HTML, then search Flipkart in a bounded browser session."""
-    amazon_results = scrape_amazon_html(query)
-    sites = [
-        ("Flipkart", "https://www.flipkart.com/search?q={query}", _extract_flipkart),
-    ]
-    
-    print(f"[SCRAPER] Starting sequential scraping for query: '{query}'")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_run_sequential_scrape, query, sites)
-        try:
-            return amazon_results + future.result(timeout=35)
-        except Exception as e:
-            return amazon_results + [{"site": "Flipkart", "error": True, "message": f"Browser error: {str(e)}"}]
+    """Fetch the retailer search page without launching a browser on Render."""
+    return scrape_amazon_html(query)

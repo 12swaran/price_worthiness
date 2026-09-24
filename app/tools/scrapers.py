@@ -2,6 +2,7 @@ import urllib.parse
 import re
 import time
 import concurrent.futures
+from urllib.parse import urljoin
 from typing import List, Dict, Any
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -57,7 +58,7 @@ def _scrape_with_own_browser(
             print(f"[SCRAPER] {site_name} found {len(results)} results")
             for r in results[:2]:
                 if not r.get("error"):
-                    print(f"  -> {r.get('title', '')[:60]} | Rs.{r.get('price', 0)}")
+                    print(f"  -> {ascii(r.get('title', '')[:60])} | Rs.{r.get('price', 0)}")
             
             page.close()
             context.close()
@@ -109,22 +110,24 @@ def _make_product_dict(site: str, title: str, price: float, url: str, rating: fl
 def _extract_amazon(page, site_name: str) -> List[Dict[str, Any]]:
     results = []
     cards = page.locator("div[data-component-type='s-search-result']").all()
+    seen_asins = set()
     
-    for i in range(min(5, len(cards))):
+    for i in range(min(30, len(cards))):
         try:
             card = cards[i]
+            asin = card.get_attribute("data-asin")
+            if not asin or asin in seen_asins:
+                continue
             
-            # Title
+            # Amazon may put only the brand in h2; the product link has the full title.
             title = ""
-            for ts in ["h2 a span", "h2 span.a-text-normal", "span.a-size-medium.a-text-normal", "span.a-text-normal", "h2"]:
+            for ts in ['[data-cy="title-recipe"] a[href*="/dp/"]', "h2 a", "h2", "img[alt]"]:
                 el = card.locator(ts).first
                 if el.count() > 0:
-                    temp_title = el.inner_text() or el.text_content()
+                    temp_title = el.get_attribute("alt") if ts == "img[alt]" else el.inner_text()
                     if temp_title and len(temp_title.strip()) > 10:
-                        title = temp_title.strip()
+                        title = re.sub(r'^Sponsored Ad -\s*', '', temp_title.strip(), flags=re.I)
                         break
-                    elif temp_title and not title:
-                        title = temp_title.strip()
             
             # Price
             price = 0.0
@@ -137,16 +140,8 @@ def _extract_amazon(page, site_name: str) -> List[Dict[str, Any]]:
                         if price > 0:
                             break
             
-            # Link
-            href = ""
-            for ls in ["h2 a", "a.a-link-normal"]:
-                link_el = card.locator(ls).first
-                if link_el.count() > 0:
-                    href = link_el.get_attribute("href") or ""
-                    if href:
-                        if not href.startswith("http"):
-                            href = "https://www.amazon.in" + href
-                        break
+            # ASIN gives a direct product link, including for sponsored listings.
+            href = f"https://www.amazon.in/dp/{asin}"
             
             # Rating
             rating = 0.0
@@ -157,8 +152,9 @@ def _extract_amazon(page, site_name: str) -> List[Dict[str, Any]]:
                     r_match = re.search(r'(\d+(\.\d+)?)', r_text)
                     rating = float(r_match.group(1)) if r_match else 0.0
             
-            if title:
+            if title and price > 0:
                 results.append(_make_product_dict(site_name, title, price, href, rating))
+                seen_asins.add(asin)
         except:
             continue
     
@@ -191,17 +187,17 @@ def _extract_flipkart(page, site_name: str) -> List[Dict[str, Any]]:
         if len(cards) > 0:
             break
     
-    for i in range(min(5, len(cards))):
+    for i in range(min(30, len(cards))):
         try:
             card = cards[i]
             
             # Title — try multiple selectors
             title = ""
-            for ts in ["a[title]", "div.KzDlHZ", "div._4rR01T", "a._2rpwqI"]:
+            for ts in ["img[alt]", "a[title]", "div.KzDlHZ", "div._4rR01T", "a._2rpwqI"]:
                 el = card.locator(ts).first
                 if el.count() > 0:
-                    title = el.get_attribute("title") or el.inner_text()
-                    if title:
+                    title = el.get_attribute("alt") or el.get_attribute("title") or el.inner_text()
+                    if title and len(title.strip()) > 5:
                         break
             
             # Price
@@ -212,14 +208,18 @@ def _extract_flipkart(page, site_name: str) -> List[Dict[str, Any]]:
                     price = extract_price(el.inner_text())
                     if price > 0:
                         break
+            if not price:
+                # Flipkart rotates CSS class names; use the first rupee amount in the card.
+                match = re.search(r'₹\s*([\d,]+(?:\.\d+)?)', card.inner_text())
+                if match:
+                    price = float(match.group(1).replace(',', ''))
             
             # Link
             href = ""
-            link_el = card.locator("a[href]").first
+            link_el = card.locator('a[href*="/p/"]').first
             if link_el.count() > 0:
                 href = link_el.get_attribute("href") or ""
-                if href and not href.startswith("http"):
-                    href = "https://www.flipkart.com" + href
+                href = urljoin("https://www.flipkart.com", href)
             
             # Rating
             rating = 0.0
@@ -230,7 +230,7 @@ def _extract_flipkart(page, site_name: str) -> List[Dict[str, Any]]:
                     rating = float(r_match.group(1)) if r_match else 0.0
                     break
             
-            if title:
+            if title and price > 0 and href:
                 results.append(_make_product_dict(site_name, title, price, href, rating))
         except:
             continue
@@ -437,14 +437,16 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
                         url = url_template.format(query=urllib.parse.quote_plus(query))
                         print(f"[SCRAPER] {site_name} navigating to: {url}")
                         
-                        page.goto(url, timeout=20000, wait_until="domcontentloaded")
-                        page.wait_for_timeout(4000)
+                        response = page.goto(url, timeout=12000, wait_until="domcontentloaded")
+                        if response and response.status >= 400:
+                            raise RuntimeError(f"Retailer returned HTTP {response.status}")
+                        page.wait_for_timeout(2000)
                         
                         results = scrape_fn(page, site_name)
                         print(f"[SCRAPER] {site_name} found {len(results)} results")
                         for r in results[:2]:
                             if not r.get("error"):
-                                print(f"  -> {r.get('title', '')[:60]} | Rs.{r.get('price', 0)}")
+                                print(f"  -> {ascii(r.get('title', '')[:60])} | Rs.{r.get('price', 0)}")
                         
                         page.close()
                         break
@@ -453,10 +455,11 @@ def _run_sequential_scrape(query: str, sites: List[Any]) -> List[Dict[str, Any]]
                         if page:
                             try: page.close()
                             except: pass
-                        if attempt == 0:
+                        if attempt == 0 and not isinstance(e, RuntimeError):
                             time.sleep(2)
                         else:
                             all_results.append({"site": site_name, "error": True, "message": str(e)})
+                            break
                 
                 if results:
                     all_results.extend(results)

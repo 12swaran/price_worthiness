@@ -1,11 +1,13 @@
 import json
+import re
+from html import escape
+from datetime import datetime, timezone
 from typing import TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.utils.llm import invoke_llm_with_retry
 from app.utils.matching import evaluate_matches
-from app.utils.cache import get_cached, set_cache
 from app.tools.scrapers import scrape_all_sequential
 
 class AgentState(TypedDict):
@@ -30,6 +32,16 @@ def parse_input(state: AgentState) -> AgentState:
         return state
         
     last_message = messages[-1].content
+    simple_query = last_message.strip()
+    if (re.fullmatch(r"[\w\s+./-]{2,100}", simple_query)
+            and not re.search(r"\b(?:it|this|that|worth|price|cost|buy|under|compare|versus|vs|for|at)\b", simple_query, re.I)):
+        # Plain product searches do not need an LLM to reinterpret the model name.
+        return {
+            **state, "product_name": simple_query, "model": "", "variant": "",
+            "user_price": None, "is_ambiguous": False, "needs_clarification": False,
+            "exact_results": [], "exact_matches": [], "found_exact": False,
+            "similar_results": [], "found_similar": False, "verdict": ""
+        }
     
     # Simple check for pronouns to use previous state
     # A real implementation would use LLM for coreference resolution, but this is a simple rule.
@@ -96,16 +108,11 @@ def parse_input(state: AgentState) -> AgentState:
 
 def search_exact(state: AgentState) -> AgentState:
     """Call scrapers with exact product name."""
-    query = f"{state.get('product_name')} {state.get('model') or ''}".strip()
-    
-    # Check cache
-    cached = get_cached("all", query)
-    if cached:
-        results = cached
-    else:
-        results = scrape_all_sequential(query)
-        set_cache("all", query, results)
-        
+    product = (state.get("product_name") or "").strip()
+    model = (state.get("model") or "").strip()
+    # The parser can put "17" in both fields; avoid searching "iPhone 17 17".
+    query = product if not model or model.lower() in product.lower() else f"{product} {model}".strip()
+    results = scrape_all_sequential(query) if query else []
     return {**state, "exact_results": results}
 
 def evaluate_results(state: AgentState) -> AgentState:
@@ -145,74 +152,67 @@ def clarify(state: AgentState) -> AgentState:
     return {**state, "verdict": msg}
 
 def search_similar(state: AgentState) -> AgentState:
-    """Broaden the search if no exact matches found."""
-    # We already have similar matches from the first search
-    similar = state.get("similar_results", [])
-    
-    # If still none, use LLM to suggest successors
-    if not similar:
-        prompt = f"""
-        The user searched for {state.get('product_name')} {state.get('model', '')}.
-        It appears to be discontinued or unavailable. 
-        What is the direct successor or a highly similar current alternative model?
-        Return ONLY the name of the alternative product.
-        """
-        response = invoke_llm_with_retry([HumanMessage(content=prompt)], temperature=0.2)
-        successor = response.content.strip()
-        
-        cached = get_cached("all", successor)
-        if cached:
-            results = cached
-        else:
-            results = scrape_all_sequential(successor)
-            set_cache("all", successor, results)
-            
-        exact_succ, similar_succ, _ = evaluate_matches(successor, "", results)
-        similar = exact_succ + similar_succ
-        
+    """Only show alternatives that were actually found on retailer pages."""
+    similar = state.get("similar_results", [])[:5]
     return {**state, "similar_results": similar[:5], "found_similar": len(similar) > 0}
 
 def generate_verdict(state: AgentState) -> AgentState:
-    """Generate the final LLM verdict."""
+    """Format the live retailer listings."""
     return _generate_llm_verdict(state, caution=False)
 
 def generate_verdict_with_caution(state: AgentState) -> AgentState:
-    """Generate verdict noting limited data."""
+    """Format listings while noting limited data."""
     return _generate_llm_verdict(state, caution=True)
 
 def _generate_llm_verdict(state: AgentState, caution: bool) -> AgentState:
-    user_query = f"{state.get('product_name')} {state.get('model') or ''} {state.get('variant') or ''}"
+    """Format observed prices directly so an LLM cannot invent prices or links."""
+    user_query = f"{state.get('product_name')} {state.get('model') or ''} {state.get('variant') or ''}".strip()
     user_price = state.get('user_price')
     exact_matches = state.get('exact_matches', [])
     similar = state.get('similar_results', [])
-    
-    prompt = f"""
-    You are a Price-Worthiness AI Agent evaluating if a product is a good deal in India.
-    User Query: {user_query}
-    User Price: {user_price if user_price else 'Not provided'}
-    
-    Exact Matches Found: {json.dumps(exact_matches)}
-    Similar/Alternative Products Found: {json.dumps(similar)}
-    
-    Caution Flag: {caution} (If True, only one exact match was found, so note limited data).
-    
-    Output a friendly, structured answer containing:
-    1. A Markdown price comparison table (site, price, availability, rating).
-    2. A verdict (worth it / overpriced / good deal / cannot judge).
-    3. Reasoning.
-    4. If there were errors on some sites, mention them.
-    5. Always include source links in the table.
-    
-    If no exact matches were found, state that and present the alternatives.
-    """
-    
-    response = invoke_llm_with_retry(
-        [SystemMessage(content="You are a helpful shopping assistant."), HumanMessage(content=prompt)],
-        temperature=0.0,
-        max_tokens=800
-    )
-    
-    return {**state, "verdict": response.content}
+
+    lines = [f"### Live listings for {escape(user_query)}"]
+    if exact_matches:
+        listings = exact_matches
+    else:
+        lines.append("I couldn't verify an exact listing with a price and product link right now.")
+        listings = similar
+        if listings:
+            lines.append("These are related listings from the same search, not exact matches:")
+
+    if listings:
+        lines.extend(["", "| Store | Product | Price | Link |", "|---|---|---:|---|"])
+        site_counts = {}
+        for item in sorted(listings, key=lambda row: row["price"]):
+            site = item["site"]
+            if site_counts.get(site, 0) >= 4 or sum(site_counts.values()) >= 12:
+                continue
+            site_counts[site] = site_counts.get(site, 0) + 1
+            title = escape(item["title"]).replace("|", "\\|").replace("\n", " ")
+            lines.append(f'| {escape(site)} | {title} | ₹{item["price"]:,.0f} | [View product](<{item["url"]}>) |')
+
+    try:
+        offered_price = float(str(user_price).replace(",", "")) if user_price is not None else None
+    except ValueError:
+        offered_price = None
+
+    if exact_matches and offered_price is not None:
+        lowest = min(item["price"] for item in exact_matches)
+        difference = offered_price - lowest
+        if difference > 0:
+            lines.append(f"\nYour offered price is ₹{difference:,.0f} above the lowest listing shown (₹{lowest:,.0f}).")
+        else:
+            lines.append(f"\nYour offered price is ₹{abs(difference):,.0f} at or below the lowest listing shown (₹{lowest:,.0f}).")
+    elif exact_matches:
+        lines.append("\nShare the price you're being offered if you want a direct comparison.")
+
+    if caution:
+        lines.append("Only one exact listing was found, so the price comparison is limited.")
+    errors = [item["site"] for item in state.get("exact_results", []) if item.get("error")]
+    if errors:
+        lines.append(f"Searches unavailable for: {', '.join(dict.fromkeys(errors))}.")
+    lines.append(f"Checked {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC. Prices may change; confirm on the retailer page.")
+    return {**state, "verdict": "\n".join(lines)}
 
 # Build the Graph
 workflow = StateGraph(AgentState)

@@ -70,7 +70,7 @@ class TestParseInput:
         """LLM sometimes wraps JSON in ```json ... ```."""
         mock_llm.return_value = MagicMock(content='```json\n{"product_name": "Sony", "model": "XM5"}\n```')
 
-        state = _base_state(messages=[HumanMessage(content="Sony XM5")])
+        state = _base_state(messages=[HumanMessage(content="What about Sony XM5?")])
         result = parse_input(state)
         assert result["product_name"] == "Sony"
 
@@ -79,7 +79,7 @@ class TestParseInput:
         """If LLM returns invalid JSON, state should be marked ambiguous."""
         mock_llm.return_value = MagicMock(content="This is not JSON at all")
 
-        state = _base_state(messages=[HumanMessage(content="something")])
+        state = _base_state(messages=[HumanMessage(content="What is something?")])
         result = parse_input(state)
         assert result.get("is_ambiguous") is True
 
@@ -125,30 +125,23 @@ class TestParseInput:
 # ─── search_exact ─────────────────────────────────────────────────────────────
 
 class TestSearchExact:
-    @patch("app.graph.scrape_all_parallel")
-    @patch("app.graph.get_cached", return_value=None)
-    @patch("app.graph.set_cache")
-    def test_calls_scraper_and_caches(self, mock_set, mock_get, mock_scrape):
+    @patch("app.graph.scrape_all_sequential")
+    def test_calls_scraper_without_duplicate_model(self, mock_scrape):
         mock_scrape.return_value = [{"site": "Amazon", "title": "iPhone 15"}]
 
-        state = _base_state(product_name="iPhone", model="15")
+        state = _base_state(product_name="iPhone 15", model="15")
         result = search_exact(state)
 
-        mock_scrape.assert_called_once()
-        mock_set.assert_called_once()
+        mock_scrape.assert_called_once_with("iPhone 15")
         assert len(result["exact_results"]) == 1
 
-    @patch("app.graph.scrape_all_parallel")
-    @patch("app.graph.get_cached")
-    def test_uses_cache_if_available(self, mock_get, mock_scrape):
-        cached_data = [{"site": "cached", "title": "cached result"}]
-        mock_get.return_value = cached_data
-
+    @patch("app.graph.scrape_all_sequential")
+    def test_scrapes_again_for_current_price(self, mock_scrape):
+        mock_scrape.side_effect = [[{"price": 100}], [{"price": 90}]]
         state = _base_state(product_name="iPhone", model="15")
-        result = search_exact(state)
-
-        mock_scrape.assert_not_called()
-        assert result["exact_results"] == cached_data
+        assert search_exact(state)["exact_results"][0]["price"] == 100
+        assert search_exact(state)["exact_results"][0]["price"] == 90
+        assert mock_scrape.call_count == 2
 
 
 # ─── evaluate_results ────────────────────────────────────────────────────────
@@ -248,36 +241,14 @@ class TestSearchSimilar:
         assert result["found_similar"] is True
 
     @patch("app.graph.invoke_llm_with_retry")
-    @patch("app.graph.scrape_all_parallel")
-    @patch("app.graph.get_cached", return_value=None)
-    @patch("app.graph.set_cache")
-    @patch("app.graph.evaluate_matches")
-    def test_asks_llm_for_successor_when_no_similar(self, mock_eval, mock_set, mock_get, mock_scrape, mock_llm):
-        mock_llm.return_value = MagicMock(content="iPhone 16")
-        mock_scrape.return_value = [{"site": "Amazon", "title": "iPhone 16"}]
-        mock_eval.return_value = ([{"title": "iPhone 16"}], [], False)
-
+    def test_no_results_does_not_invent_successor(self, mock_llm):
         state = _base_state(similar_results=[], product_name="iPhone 15", model="Pro")
         result = search_similar(state)
+        mock_llm.assert_not_called()
+        assert result["found_similar"] is False
 
-        mock_llm.assert_called_once()
-        assert result["found_similar"] is True
-
-    @patch("app.graph.invoke_llm_with_retry")
-    @patch("app.graph.scrape_all_parallel")
-    @patch("app.graph.get_cached", return_value=None)
-    @patch("app.graph.set_cache")
-    @patch("app.graph.evaluate_matches")
-    def test_limits_similar_to_5(self, mock_eval, mock_set, mock_get, mock_scrape, mock_llm):
-        mock_llm.return_value = MagicMock(content="Successor")
-        mock_scrape.return_value = []
-        mock_eval.return_value = (
-            [{"title": f"Product {i}"} for i in range(10)],
-            [],
-            False
-        )
-
-        state = _base_state(similar_results=[])
+    def test_limits_similar_to_5(self):
+        state = _base_state(similar_results=[{"title": f"Product {i}"} for i in range(10)])
         result = search_similar(state)
         assert len(result["similar_results"]) <= 5
 
@@ -286,28 +257,27 @@ class TestSearchSimilar:
 
 class TestGenerateVerdict:
     @patch("app.graph.invoke_llm_with_retry")
-    def test_generates_verdict_text(self, mock_llm):
-        mock_llm.return_value = MagicMock(content="## Verdict: Good deal!")
-
+    def test_uses_observed_price_and_link(self, mock_llm):
         state = _base_state(
             product_name="iPhone 15",
             model="128GB",
             user_price=65000,
-            exact_matches=[{"title": "iPhone 15", "price": 60000}],
+            exact_matches=[{"site": "Amazon.in", "title": "iPhone 15", "price": 60000,
+                            "url": "https://www.amazon.in/dp/ABC"}],
         )
         result = generate_verdict(state)
-        assert "Verdict" in result["verdict"] or "deal" in result["verdict"].lower()
+        assert "₹60,000" in result["verdict"]
+        assert "https://www.amazon.in/dp/ABC" in result["verdict"]
+        mock_llm.assert_not_called()
 
-    @patch("app.graph.invoke_llm_with_retry")
-    def test_generates_caution_verdict(self, mock_llm):
-        mock_llm.return_value = MagicMock(content="## Verdict: Cannot judge (limited data)")
-
+    def test_generates_caution_verdict(self):
         state = _base_state(
             product_name="Obscure Phone",
-            exact_matches=[{"title": "Obscure Phone X1"}],
+            exact_matches=[{"site": "Amazon.in", "title": "Obscure Phone X1", "price": 1000,
+                            "url": "https://www.amazon.in/dp/ABC"}],
         )
         result = generate_verdict_with_caution(state)
-        assert result["verdict"] != ""
+        assert "limited" in result["verdict"]
 
 
 # ─── Workflow graph structure ─────────────────────────────────────────────────
@@ -343,10 +313,8 @@ class TestWorkflowGraph:
 
 class TestEndToEndFlow:
     @patch("app.graph.invoke_llm_with_retry")
-    @patch("app.graph.scrape_all_parallel")
-    @patch("app.graph.get_cached", return_value=None)
-    @patch("app.graph.set_cache")
-    def test_exact_match_flow(self, mock_set, mock_get, mock_scrape, mock_llm):
+    @patch("app.graph.scrape_all_sequential")
+    def test_exact_match_flow(self, mock_scrape, mock_llm):
         """Full flow: parse → search → evaluate → verdict (exact matches found)."""
         # First LLM call: parse_input
         parse_response = MagicMock(content=json.dumps({
@@ -356,10 +324,7 @@ class TestEndToEndFlow:
             "user_price": 65000,
             "is_ambiguous": False,
         }))
-        # Second LLM call: generate_verdict
-        verdict_response = MagicMock(content="## Verdict\n\nThe iPhone 15 at ₹65,000 is a fair deal.")
-
-        mock_llm.side_effect = [parse_response, verdict_response]
+        mock_llm.return_value = parse_response
 
         # Scraper returns results with matching titles
         mock_scrape.return_value = [
@@ -383,12 +348,11 @@ class TestEndToEndFlow:
 
         assert final_state["verdict"] != ""
         assert final_state["product_name"] == "Apple iPhone 15"
+        assert "₹62,000" in final_state["verdict"]
 
     @patch("app.graph.invoke_llm_with_retry")
-    @patch("app.graph.scrape_all_parallel")
-    @patch("app.graph.get_cached", return_value=None)
-    @patch("app.graph.set_cache")
-    def test_ambiguous_flow_goes_to_clarify(self, mock_set, mock_get, mock_scrape, mock_llm):
+    @patch("app.graph.scrape_all_sequential")
+    def test_ambiguous_flow_goes_to_clarify(self, mock_scrape, mock_llm):
         """Flow: parse (ambiguous=True) → search → evaluate → clarify."""
         parse_response = MagicMock(content=json.dumps({
             "product_name": "headphones",

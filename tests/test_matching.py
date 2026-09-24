@@ -173,6 +173,42 @@ class TestEvaluateMatches:
         # The model filter should exclude it from exact_matches
         assert all("128" not in r["title"].lower() or "128gb" in r["title"].lower() for r in exact)
 
+    def test_iphone_17_excludes_accessories_and_other_models(self):
+        results = [
+            self._make_result("Apple iPhone 17 (White, 256 GB)"),
+            self._make_result("iPhone 17 protective case"),
+            self._make_result("Apple iPhone 16 128 GB"),
+            self._make_result("Apple iPhone 17 Pro 256 GB"),
+        ]
+        exact, similar, _ = evaluate_matches("iPhone 17", "", results)
+        assert [item["title"] for item in exact] == ["Apple iPhone 17 (White, 256 GB)"]
+        assert all("case" not in item["title"] for item in exact + similar)
+        assert all("Pro" not in item["title"] for item in exact)
+
+    def test_listing_requires_price_and_link(self):
+        results = [
+            self._make_result("Apple iPhone 17", price=0),
+            {**self._make_result("Apple iPhone 17"), "url": ""},
+        ]
+        exact, similar, _ = evaluate_matches("iPhone 17", "", results)
+        assert exact == similar == []
+
+    def test_bare_iphone_does_not_match_cases(self):
+        results = [
+            self._make_result("Apple iPhone 16 128 GB"),
+            self._make_result("Apple iPhone 17 256 GB"),
+            self._make_result("iPhone silicone case"),
+        ]
+        exact, similar, ambiguous = evaluate_matches("iPhone", "", results)
+        assert len(exact) == 2
+        assert ambiguous is True
+        assert all("case" not in item["title"] for item in exact + similar)
+
+    def test_missing_requested_variant_is_not_exact(self):
+        results = [self._make_result("Samsung Galaxy S24 256GB")]
+        exact, _, _ = evaluate_matches("Samsung Galaxy S24 Ultra", "256GB", results)
+        assert exact == []
+
 
 # ─── threshold boundary tests ────────────────────────────────────────────────
 
@@ -185,7 +221,7 @@ class TestMatchingThresholds:
             "title": title,
             "price": 1000,
             "currency": "INR",
-            "url": "",
+            "url": "https://example.com/product",
             "availability": "In Stock",
             "rating": 0,
             "reviews_count": 0,

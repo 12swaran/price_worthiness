@@ -3,10 +3,10 @@
 A robust, multi-agent AI shopping assistant that evaluates whether a product is worth its price by scraping 5 major Indian e-commerce platforms (Amazon.in, Flipkart, Reliance Digital, Croma, Vijay Sales).
 
 ## Features
-- **LangGraph Orchestration**: Complex state machine to handle exact matches, similarities, ambiguities, and caching.
-- **LLM Powered**: Groq API (`openai/gpt-oss-120b`) parses input and generates natural language verdicts.
-- **Parallel Scraping**: Uses Playwright to scrape retailers simultaneously.
-- **Fuzzy Matching**: Uses RapidFuzz to match product variants accurately.
+- **LangGraph Orchestration**: Handles exact matches, related listings, and ambiguous requests.
+- **LLM Powered**: Groq API (`openai/gpt-oss-120b`) parses conversational requests; plain product searches use the entered name directly.
+- **Live Scraping**: Uses Playwright to check retailer search pages for each request; prices are not served from cache.
+- **Product Matching**: Filters accessories and mismatched models before showing retailer prices and product links.
 
 ## Installation
 
